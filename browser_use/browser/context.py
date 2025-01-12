@@ -476,7 +476,8 @@ class BrowserContext:
 
 		# Calculate remaining time to meet minimum WAIT_TIME
 		elapsed = time.time() - start_time
-		remaining = max((timeout_overwrite or self.config.minimum_wait_page_load_time) - elapsed, 0)
+		#Changed from max to min
+		remaining = min((timeout_overwrite or self.config.minimum_wait_page_load_time) - elapsed, 0)
 
 		logger.debug(
 			f'--Page loaded in {elapsed:.2f} seconds, waiting for additional {remaining:.2f} seconds'
@@ -535,7 +536,8 @@ class BrowserContext:
 	@time_execution_sync('--get_state')  # This decorator might need to be updated to handle async
 	async def get_state(self, use_vision: bool = False) -> BrowserState:
 		"""Get the current state of the browser"""
-		await self._wait_for_page_and_frames_load()
+		#reduced timeout to 0.25s
+		await self._wait_for_page_and_frames_load(timeout_overwrite=0.5)
 		session = await self.get_session()
 		session.cached_state = await self._update_state(use_vision=use_vision)
 
@@ -909,7 +911,7 @@ class BrowserContext:
 
 		if url:
 			await page.goto(url)
-			await self._wait_for_page_and_frames_load(timeout_overwrite=1)
+			await self._wait_for_page_and_frames_load(timeout_overwrite=0.5)
 
 	# endregion
 
