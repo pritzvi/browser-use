@@ -497,6 +497,7 @@ class Controller:
 				if not new_path_hashes.issubset(cached_path_hashes):
 					# next action requires index but there are new elements on the page
 					logger.info(f'Something new appeared after action {i } / {len(actions)}')
+					results.append(ActionResult(extracted_content=f"Action {i} failed because there are new elements on the page", include_in_memory=True))
 					break
 
 			results.append(await self.act(action, browser_context))

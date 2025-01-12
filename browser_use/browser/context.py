@@ -470,7 +470,8 @@ class BrowserContext:
 
 		# Wait for page load
 		try:
-			await self._wait_for_stable_network()
+			await asyncio.sleep(0.5)
+			# await self._wait_for_stable_network()
 		except Exception:
 			logger.warning('Page load failed, continuing...')
 			pass

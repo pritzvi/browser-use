@@ -62,7 +62,7 @@ def action_registry():
 @pytest.fixture
 def sample_history(action_registry):
 	# Create actions with nested params structure
-	click_action = action_registry(click_element={'index': 1})
+	_action = action_registry(click_element={'index': 1})
 
 	extract_action = action_registry(extract_page_content={'value': 'text'})
 

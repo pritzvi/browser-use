@@ -179,6 +179,7 @@ class Agent:
 			result: list[ActionResult] = await self.controller.multi_act(
 				model_output.action, self.browser_context
 			)
+
 			self._last_result = result
 
 			if len(result) > 0 and result[-1].is_done:
@@ -419,7 +420,7 @@ class Agent:
 		is_valid = parsed.is_valid
 		if not is_valid:
 			logger.info(f'❌ Validator decision: {parsed.reason}')
-			msg = f'The ouput is not yet correct. {parsed.reason}.'
+			msg = f'The output is not yet correct. {parsed.reason}.'
 			self._last_result = [ActionResult(extracted_content=msg, include_in_memory=True)]
 		else:
 			logger.info(f'✅ Validator decision: {parsed.reason}')
@@ -567,7 +568,7 @@ class Agent:
 		duration: int = 3000,
 		show_goals: bool = True,
 		show_task: bool = True,
-		show_logo: bool = True,
+		show_logo: bool = False,
 		font_size: int = 40,
 		title_font_size: int = 56,
 		goal_font_size: int = 44,

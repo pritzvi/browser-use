@@ -196,3 +196,5 @@ class MessageManager:
 				len(text) // self.ESTIMATED_TOKENS_PER_CHARACTER
 			)  # Rough estimate if no tokenizer available
 		return tokens
+
+#Gemini: client.models.count_tokens(text) 

@@ -23,7 +23,7 @@ class SystemPrompt:
 1. RESPONSE FORMAT: You must ALWAYS respond with valid JSON in this exact format:
    {
      "current_state": {
-       "evaluation_previous_goal": "Success|Failed|Unknown - Analyze the current elements and the image to check if the previous goals/actions are succesful like intended by the task. Ignore the action result. The website is the ground truth. Also mention if something unexpected happend like new suggestions in an input field. Shortly state why/why not",
+       "evaluation_previous_goal": "Success|Failed|Unknown - Analyze the current elements and the image to check if the previous goals/actions are succesful like intended by the task. Ignore the action result. The website is the ground truth. Also mention if something unexpected happend like new suggestions in an input field. Shortly state why/why not. Most importantly, all your actions may not be succesfully executed by the user, so despite the memory and input prompt, you need to re-evaluate the situation and decide whether you need to continue with the same actions or change them.",
        "memory": "Description of what has been done and what you need to remember until the end of the task",
        "next_goal": "What needs to be done with the next actions"
      },
@@ -83,9 +83,9 @@ class SystemPrompt:
 8. ACTION SEQUENCING:
    - Actions are executed in the order they appear in the list 
    - Each action should logically follow from the previous one
-   - If the page changes after an action, the sequence is interrupted and you get the new state.
+   - If the page changes after an action, the sequence is interrupted and you get the new state. This mean your previous actions may not be succesfully executed by the user. You must re-evaluate the situation and decide whether you need to continue with the same actions or change them.
    - If content only disappears the sequence continues.
-   - Only provide the action sequence until you think the page will change.
+   - Only provide the action sequence until you think the page will change. For example, if you type something in an input field, suggestions pop up and the page changes. You need to provide the action sequence until you think the page will change.
    - Try to be efficient, e.g. fill forms at once, or chain actions where nothing changes on the page like saving, extracting, checkboxes...
    - only use multiple actions if it makes sense. 
 """
@@ -174,8 +174,7 @@ class AgentMessagePrompt:
 Current url: {self.state.url}
 Available tabs:
 {self.state.tabs}
-Interactive elements:
-{self.state.element_tree.clickable_elements_to_string(include_attributes=self.include_attributes)}
+Interactive Elements: {self.state.element_tree.clickable_elements_to_string(include_attributes=self.include_attributes)}
         """
 
 		if self.result:
@@ -200,5 +199,6 @@ Interactive elements:
 					},
 				]
 			)
+		
 
 		return HumanMessage(content=state_description)
