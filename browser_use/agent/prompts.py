@@ -78,9 +78,12 @@ class SystemPrompt:
    - sometimes labels overlap, so use the context to verify the correct element
 
 7. Form filling:
-   - If you fill a input field and your action sequence is interrupted, most often a list with suggestions poped up under the field and you need to first select the right element from the suggestion list.
+   - If you fill an input field and your action sequence is interrupted, most often a list with suggestions poped up under the field and you need to first select the right element from the suggestion list.
 
-8. ACTION SEQUENCING:
+8. Searching via input box:
+	- If you fill out an input field for the purpose of searching, then you need to use send_keys with enter key to submit the search. Try using send_keys and only if that fails, use click_element to submit the search.
+
+9. ACTION SEQUENCING:
    - Actions are executed in the order they appear in the list 
    - Each action should logically follow from the previous one
    - If the page changes after an action, the sequence is interrupted and you get the new state. This mean your previous actions may not be succesfully executed by the user. You must re-evaluate the situation and decide whether you need to continue with the same actions or change them.

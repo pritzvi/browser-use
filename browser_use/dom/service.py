@@ -21,7 +21,7 @@ class DomService:
 		self.xpath_cache = {}
 
 	# region - Clickable elements
-	async def get_clickable_elements(self, highlight_elements: bool = False) -> DOMState:
+	async def get_clickable_elements(self, highlight_elements: bool = True) -> DOMState:
 		element_tree = await self._build_dom_tree(highlight_elements)
 		selector_map = self._create_selector_map(element_tree)
 
