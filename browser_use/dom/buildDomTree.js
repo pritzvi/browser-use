@@ -1,5 +1,5 @@
 (
-    doHighlightElements = true
+    doHighlightElements = false
 ) => {
     let highlightIndex = 0; // Reset highlight index
 
