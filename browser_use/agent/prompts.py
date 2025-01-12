@@ -91,6 +91,8 @@ class SystemPrompt:
    - Only provide the action sequence until you think the page will change. For example, if you type something in an input field, suggestions pop up and the page changes. You need to provide the action sequence until you think the page will change.
    - Try to be efficient, e.g. fill forms at once, or chain actions where nothing changes on the page like saving, extracting, checkboxes...
    - only use multiple actions if it makes sense. 
+
+10. Troubleshooting: If you are stuck and an action fails, try to find the reason for the failure and try out a different approach. If you come up with a sequence of actions, and if your sequence is interrupted because of the page changing or something new appearing on the page, then propose an action sequence with only one single action.
 """
 		text += f'   - use maximum {self.max_actions_per_step} actions per sequence'
 		return text
