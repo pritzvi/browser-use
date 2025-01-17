@@ -6,13 +6,13 @@ import io
 import json
 import logging
 import os
+import platform
 import textwrap
 import time
 import uuid
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional, Type, TypeVar
-import platform
 
 from dotenv import load_dotenv
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -47,7 +47,7 @@ from browser_use.telemetry.service import ProductTelemetry
 from browser_use.telemetry.views import (
 	AgentEndTelemetryEvent,
 	AgentRunTelemetryEvent,
-	AgentStepErrorTelemetryEvent,
+	AgentStepTelemetryEvent,
 )
 from browser_use.utils import time_execution_async
 
@@ -67,6 +67,7 @@ class Agent:
 		controller: Controller = Controller(),
 		use_vision: bool = True,
 		save_conversation_path: Optional[str] = None,
+		save_conversation_path_encoding: Optional[str] = "utf-8",
 		max_failures: int = 3,
 		retry_delay: int = 10,
 		system_prompt_class: Type[SystemPrompt] = SystemPrompt,
@@ -95,6 +96,7 @@ class Agent:
 		self.use_vision = use_vision
 		self.llm = llm
 		self.save_conversation_path = save_conversation_path
+		self.save_conversation_path_encoding = save_conversation_path_encoding
 		self._last_result = None
 		self.include_attributes = include_attributes
 		self.max_error_length = max_error_length
@@ -131,6 +133,7 @@ class Agent:
 		self._setup_action_models()
 
 		self.max_input_tokens = max_input_tokens
+		self.tool_call_in_content = tool_call_in_content
 
 		self.message_manager = MessageManager(
 			llm=self.llm,
@@ -200,16 +203,23 @@ class Agent:
 			self._last_result = result
 
 		finally:
+			actions = (
+				[a.model_dump(exclude_unset=True) for a in model_output.action]
+				if model_output
+				else []
+			)
+			self.telemetry.capture(
+				AgentStepTelemetryEvent(
+					agent_id=self.agent_id,
+					step=self.n_steps,
+					actions=actions,
+					consecutive_failures=self.consecutive_failures,
+					step_error=[r.error for r in result if r.error] if result else ['No result'],
+				)
+			)
 			if not result:
 				return
-			for r in result:
-				if r.error:
-					self.telemetry.capture(
-						AgentStepErrorTelemetryEvent(
-							agent_id=self.agent_id,
-							error=r.error,
-						)
-					)
+
 			if state:
 				self._make_history_item(model_output, state, result)
 
@@ -315,7 +325,7 @@ class Agent:
 		# create folders if not exists
 		os.makedirs(os.path.dirname(self.save_conversation_path), exist_ok=True)
 
-		with open(self.save_conversation_path + f'_{self.n_steps}.txt', 'w') as f:
+		with open(self.save_conversation_path + f'_{self.n_steps}.txt', 'w', encoding=self.save_conversation_path_encoding) as f:
 			self._write_messages_to_file(f, input_messages)
 			self._write_response_to_file(f, response)
 
@@ -342,17 +352,51 @@ class Agent:
 		f.write(' RESPONSE\n')
 		f.write(json.dumps(json.loads(response.model_dump_json(exclude_unset=True)), indent=2))
 
+	def _log_agent_run(self) -> None:
+		"""Log the agent run"""
+		logger.info(f'🚀 Starting task: {self.task}')
+		# model_name is eiter model or model_name
+		if hasattr(self.llm, 'model_name'):
+			model_name = self.llm.model_name  # type: ignore
+		elif hasattr(self.llm, 'model'):
+			model_name = self.llm.model  # type: ignore
+		else:
+			model_name = 'Unknown'
+
+		try:
+			import pkg_resources
+
+			version = pkg_resources.get_distribution('browser-use').version
+			source = 'pip'
+		except Exception:
+			try:
+				import subprocess
+
+				version = (
+					subprocess.check_output(['git', 'describe', '--tags']).decode('utf-8').strip()
+				)
+				source = 'git'
+			except Exception:
+				version = 'unknown'
+				source = 'unknown'
+		logger.debug(f'Version: {version}, Source: {source}')
+		self.telemetry.capture(
+			AgentRunTelemetryEvent(
+				agent_id=self.agent_id,
+				use_vision=self.use_vision,
+				tool_call_in_content=self.tool_call_in_content,
+				task=self.task,
+				model_name=model_name,
+				chat_model_library=self.llm.__class__.__name__,
+				version=version,
+				source=source,
+			)
+		)
+
 	async def run(self, max_steps: int = 100) -> AgentHistoryList:
 		"""Execute the task with maximum number of steps"""
 		try:
-			logger.info(f'🚀 Starting task: {self.task}')
-
-			self.telemetry.capture(
-				AgentRunTelemetryEvent(
-					agent_id=self.agent_id,
-					task=self.task,
-				)
-			)
+			self._log_agent_run()
 
 			for step in range(max_steps):
 				if self._too_many_failures():
@@ -378,9 +422,10 @@ class Agent:
 			self.telemetry.capture(
 				AgentEndTelemetryEvent(
 					agent_id=self.agent_id,
-					task=self.task,
 					success=self.history.is_done(),
-					steps=len(self.history.history),
+					steps=self.n_steps,
+					max_steps_reached=self.n_steps >= max_steps,
+					errors=self.history.errors(),
 				)
 			)
 			if not self.injected_browser_context:
@@ -609,9 +654,11 @@ class Agent:
 
 			for font_name in font_options:
 				try:
-					if platform.system() == "Windows":
+					if platform.system() == 'Windows':
 						# Need to specify the abs font path on Windows
-						font_name = os.path.join(os.getenv("WIN_FONT_DIR", "C:\\Windows\\Fonts"), font_name + ".ttf")
+						font_name = os.path.join(
+							os.getenv('WIN_FONT_DIR', 'C:\\Windows\\Fonts'), font_name + '.ttf'
+						)
 					regular_font = ImageFont.truetype(font_name, font_size)
 					title_font = ImageFont.truetype(font_name, title_font_size)
 					goal_font = ImageFont.truetype(font_name, goal_font_size)
