@@ -501,12 +501,8 @@ class Controller:
 				)
 				if not new_path_hashes.issubset(cached_path_hashes):
 					# next action requires index but there are new elements on the page
-<<<<<<< HEAD
 					logger.info(f'Something new appeared after action {i } / {len(actions)}')
-					results.append(ActionResult(extracted_content=f"Action {i} failed because there are new elements on the page", include_in_memory=True))
-=======
-					logger.info(f'Something new appeared after action {i} / {len(actions)}')
->>>>>>> upstream/main
+					results.append(ActionResult(extracted_content=f"Action {i}: {action.model_dump_json(exclude_unset=True)} failed because there are new elements on the page. Need to evaluate the page again and retry the action that failed.", include_in_memory=True))
 					break
 
 			results.append(await self.act(action, browser_context))
