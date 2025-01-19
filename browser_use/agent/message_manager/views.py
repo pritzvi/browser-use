@@ -35,3 +35,11 @@ class MessageHistory(BaseModel):
 		if self.messages:
 			msg = self.messages.pop(index)
 			self.total_tokens -= msg.metadata.input_tokens
+	
+	def replace_message(self, index: int, message: BaseMessage, metadata: MessageMetadata) -> None:
+		"""Replace message at specified index"""
+		if 0 <= index < len(self.messages):
+			old_msg = self.messages[index]
+			self.total_tokens -= old_msg.metadata.input_tokens
+			self.total_tokens += metadata.input_tokens
+			self.messages[index] = ManagedMessage(message=message, metadata=metadata)

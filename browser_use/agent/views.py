@@ -41,6 +41,15 @@ class AgentBrain(BaseModel):
 	memory: str
 	next_goal: str
 
+class EvaluationOutput(BaseModel):
+    """Output model for evaluation stage"""
+    current_state: AgentBrain  # Reuse existing AgentBrain model
+
+
+class FilterOutput(BaseModel):
+	"""Output model for filter stage"""
+	filtered_dom: str
+
 
 class AgentOutput(BaseModel):
 	"""Output model for agent

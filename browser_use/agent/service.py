@@ -33,6 +33,8 @@ from browser_use.agent.views import (
 	AgentHistoryList,
 	AgentOutput,
 	AgentStepInfo,
+	EvaluationOutput,
+	FilterOutput,
 )
 from browser_use.browser.browser import Browser
 from browser_use.browser.context import BrowserContext
@@ -104,7 +106,7 @@ class Agent:
 		# Controller setup
 		self.controller = controller
 		self.max_actions_per_step = max_actions_per_step
-
+		self.next_goal = None
 		# Browser setup
 		self.injected_browser = browser is not None
 		self.injected_browser_context = browser_context is not None
@@ -155,6 +157,14 @@ class Agent:
 		self.retry_delay = retry_delay
 		self.validate_output = validate_output
 
+		# Add state tracking
+		self.previous_state: Optional[BrowserState] = None
+		self.current_state: Optional[BrowserState] = None
+		self.previous_goal: Optional[str] = None
+
+		self.EvaluationOutput = EvaluationOutput
+		self.FilterOutput = FilterOutput
+
 		if save_conversation_path:
 			logger.info(f'Saving conversation to {save_conversation_path}')
 
@@ -174,12 +184,30 @@ class Agent:
 		result: list[ActionResult] = []
 
 		try:
-			state = await self.browser_context.get_state(use_vision=self.use_vision)
-			self.message_manager.add_state_message(state, self._last_result, step_info)
-			input_messages = self.message_manager.get_messages()
+			# Store previous state before getting new one
+			self.previous_state = self.current_state
+			
+			# Get current browser state
+			self.current_state = await self.browser_context.get_state(use_vision=self.use_vision)
+			
+			# Store previous goal before getting new actions
+			if self.next_goal:
+				self.previous_goal = self.next_goal
+				
+			# Add state to message manager
+			self.message_manager.add_state_message(
+				state=self.current_state,
+				previous_state=self.previous_state,
+				previous_goal=self.previous_goal,
+				result=self._last_result, 
+				step_info=step_info
+			)
+			#input_messages = self.message_manager.get_messages(stage = "None")
+			#logger.info(f'Current state: {input_messages}')
+			#logger.info(f'Next goal: {self.next_goal}')
 			try:
-				model_output = await self.get_next_action(input_messages)
-				self._save_conversation(input_messages, model_output)
+				model_output = await self.get_next_action()
+				
 				self.message_manager._remove_last_state_message()  # we dont want the whole state in the chat history
 				self.message_manager.add_model_output(model_output)
 			except Exception as e:
@@ -283,22 +311,64 @@ class Agent:
 		self.history.history.append(history_item)
 
 	@time_execution_async('--get_next_action')
-	async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
-		"""Get next action from LLM based on current state"""
-
-		structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True)
-		response: dict[str, Any] = await structured_llm.ainvoke(input_messages)  # type: ignore
-
-		parsed: AgentOutput = response['parsed']
+	async def get_next_action(self) -> AgentOutput:
+		"""Get next action using staged prompts"""
+		
+		# Stage 1: Evaluate previous state and plan next goal
+		eval_messages = self.message_manager.get_messages(stage='evaluate', previous_state=self.previous_state, previous_goal=self.previous_goal, state=self.current_state, result=self._last_result)
+		eval_llm = self.llm.with_structured_output(self.EvaluationOutput, include_raw=True)
+		eval_response: dict[str, Any] = await eval_llm.ainvoke(eval_messages) # type: ignore
+		eval_result: EvaluationOutput = eval_response['parsed'] # type: ignore
+		self._log_eval_response(eval_result)
+		
+		# Stage 2: Filter relevant elements
+		filter_messages = self.message_manager.get_messages(stage='filter', eval_result=eval_result, state=self.current_state)
+		filter_llm = self.llm.with_structured_output(self.FilterOutput, include_raw=True)
+		filter_response: dict[str, Any] = await filter_llm.ainvoke(filter_messages) # type: ignore
+		filter_result: FilterOutput = filter_response['parsed'] # type: ignore
+		self._log_filter_response(filter_result)
+		
+		# Stage 3: Plan actions
+		action_messages = self.message_manager.get_messages(stage='action', filter_result=filter_result, eval_result=eval_result)
+		action_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True)
+		final_response: dict[str, Any] = await action_llm.ainvoke(action_messages) #type: ignore
+		parsed = final_response['parsed'] #type: ignore
+		
 		if parsed is None:
 			raise ValueError(f'Could not parse response.')
-
-		# cut the number of actions to max_actions_per_step
-		parsed.action = parsed.action[: self.max_actions_per_step]
+		
+		parsed.action = parsed.action[:self.max_actions_per_step]
+		self.next_goal = eval_result.current_state.next_goal
 		self._log_response(parsed)
 		self.n_steps += 1
 
+		# Save all conversations in a single operation
+		conversations = [
+			('evaluate', eval_messages, eval_result),
+			('filter', filter_messages, filter_result),
+			('action', action_messages, parsed)
+		]
+		self._save_conversation(conversations)
+		
 		return parsed
+
+	def _log_eval_response(self, response: EvaluationOutput) -> None:
+		"""Log the evaluation stage response"""
+		if 'Success' in response.current_state.evaluation_previous_goal:
+			emoji = '👍'
+		elif 'Failed' in response.current_state.evaluation_previous_goal:
+			emoji = '⚠'
+		else:
+			emoji = '🤷'
+		logger.info(f'Stage 1 - Evaluation:')
+		logger.info(f'{emoji} Eval: {response.current_state.evaluation_previous_goal}')
+		logger.info(f'🧠 Memory: {response.current_state.memory}')
+		logger.info(f'🎯 Next goal: {response.current_state.next_goal}')
+
+	def _log_filter_response(self, response: FilterOutput) -> None:
+		"""Log the filter stage response"""
+		logger.info(f'Stage 2 - Filtering:')
+		logger.info(f'🔍 Filtered DOM elements: {response.filtered_dom}')
 
 	def _log_response(self, response: AgentOutput) -> None:
 		"""Log the model's response"""
@@ -309,6 +379,7 @@ class Agent:
 		else:
 			emoji = '🤷'
 
+		logger.info(f'Stage 3 - Action Planning:')
 		logger.info(f'{emoji} Eval: {response.current_state.evaluation_previous_goal}')
 		logger.info(f'🧠 Memory: {response.current_state.memory}')
 		logger.info(f'🎯 Next goal: {response.current_state.next_goal}')
@@ -317,8 +388,8 @@ class Agent:
 				f'🛠️  Action {i + 1}/{len(response.action)}: {action.model_dump_json(exclude_unset=True)}'
 			)
 
-	def _save_conversation(self, input_messages: list[BaseMessage], response: Any) -> None:
-		"""Save conversation history to file if path is specified"""
+	def _save_conversation(self, conversations: list[tuple[str, list[BaseMessage], Any]]) -> None:
+		"""Save all conversation stages to file in order"""
 		if not self.save_conversation_path:
 			return
 
@@ -326,8 +397,10 @@ class Agent:
 		os.makedirs(os.path.dirname(self.save_conversation_path), exist_ok=True)
 
 		with open(self.save_conversation_path + f'_{self.n_steps}.txt', 'w', encoding=self.save_conversation_path_encoding) as f:
-			self._write_messages_to_file(f, input_messages)
-			self._write_response_to_file(f, response)
+			for stage, messages, response in conversations:
+				f.write(f"\n\n=== {stage.upper()} STAGE ===\n")
+				self._write_messages_to_file(f, messages)
+				self._write_response_to_file(f, response)
 
 	def _write_messages_to_file(self, f: Any, messages: list[BaseMessage]) -> None:
 		"""Write messages to conversation file"""
@@ -408,6 +481,7 @@ class Agent:
 					if (
 						self.validate_output and step < max_steps - 1
 					):  # if last step, we dont need to validate
+						logger.info(f'🔍 Validating output for step {step + 1} of {max_steps}')
 						if not await self._validate_output():
 							continue
 
@@ -446,19 +520,68 @@ class Agent:
 
 	async def _validate_output(self) -> bool:
 		"""Validate the output of the last action is what the user wanted"""
-		system_msg = (
-			f'You are a validator of an agent who interacts with a browser. '
-			f'Validate if the output of last action is what the user wanted and if the task is completed. '
-			f'If the task is unclear defined, you can let it pass. But if something is missing or the image does not show what was requested dont let it pass. '
-			f'Try to understand the page and help the model with suggestions like scroll, do x, ... to get the solution right. '
-			f'Task to validate: {self.task}. Return a JSON object with 2 keys: is_valid and reason. '
-			f'is_valid is a boolean that indicates if the output is correct. '
-			f'reason is a string that explains why it is valid or not.'
-			f' example: {{"is_valid": false, "reason": "The user wanted to search for "cat photos", but the agent searched for "dog photos" instead."}}'
-		)
 
+		# Add detailed state printing
+		logger.info("\n🔍 Detailed State Information:")
 		if self.browser_context.session:
 			state = await self.browser_context.get_state(use_vision=self.use_vision)
+			
+			# Print basic state info
+			logger.info("\n📍 Browser State:")
+			logger.info(f"  URL: {state.url}")
+			logger.info(f"  Title: {state.title}")
+			
+			# Print all tabs
+			logger.info("\n📑 Tabs:")
+			for tab in state.tabs:
+				logger.info(f"  • Tab {tab.page_id}: {tab.title} ({tab.url})")
+			
+			# Print DOM state if available
+			if hasattr(state, 'dom_elements'):
+				logger.info("\n🌳 DOM Elements:")
+				for elem in state.dom_elements:
+					logger.info(f"\n  Element:")
+					logger.info(f"    Tag: {elem.tag}")
+					logger.info(f"    Text: {elem.text if elem.text else 'No text'}")
+					logger.info(f"    XPath: {elem.xpath}")
+					logger.info(f"    Attributes: {json.dumps(elem.attributes, indent=2)}")
+					if hasattr(elem, 'children') and elem.children:
+						logger.info(f"    Child Elements: {len(elem.children)}")
+			
+			# Print interacted elements
+			if hasattr(state, 'interacted_element'):
+				logger.info("\n🎯 Interacted Elements:")
+				for elem in state.interacted_element:
+					if elem:
+						logger.info(f"\n  Interacted Element:")
+						logger.info(f"    Tag: {elem.tag}")
+						logger.info(f"    Text: {elem.text if elem.text else 'No text'}")
+						logger.info(f"    XPath: {elem.xpath}")
+						logger.info(f"    Attributes: {json.dumps(elem.attributes, indent=2)}")
+			
+			# Print last action results
+			if self._last_result:
+				logger.info("\n🤖 Last Action Results:")
+				for result in self._last_result:
+					logger.info(f"\n  Result:")
+					if result.extracted_content:
+						logger.info(f"    Content: {result.extracted_content}")
+					if result.error:
+						logger.info(f"    Error: {result.error[:self.max_error_length]}")
+					logger.info(f"    Is Done: {result.is_done}")
+					logger.info(f"    Include in Memory: {result.include_in_memory}")
+
+			system_msg = (
+				f'You are a validator of an agent who interacts with a browser. '
+				f'Validate if the output of last action is what the user wanted and if the task is completed. '
+				f'If the task is unclear defined, you can let it pass. But if something is missing or the image does not show what was requested dont let it pass. '
+				f'Try to understand the page and help the model with suggestions like scroll, do x, ... to get the solution right. '
+				f'Task to validate: {self.task}. Return a JSON object with 2 keys: is_valid and reason. '
+				f'is_valid is a boolean that indicates if the output is correct. '
+				f'reason is a string that explains why it is valid or not.'
+				f' example: {{"is_valid": false, "reason": "The user wanted to search for "cat photos", but the agent searched for "dog photos" instead."}}'
+			)
+
 			content = AgentMessagePrompt(
 				state=state,
 				result=self._last_result,

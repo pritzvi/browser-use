@@ -15,7 +15,7 @@ from langchain_openai import ChatOpenAI
 
 from browser_use.agent.message_manager.views import MessageHistory, MessageMetadata
 from browser_use.agent.prompts import AgentMessagePrompt, SystemPrompt
-from browser_use.agent.views import ActionResult, AgentOutput, AgentStepInfo
+from browser_use.agent.views import ActionResult, AgentOutput, AgentStepInfo, EvaluationOutput, FilterOutput
 from browser_use.browser.views import BrowserState
 
 logger = logging.getLogger(__name__)
@@ -46,15 +46,17 @@ class MessageManager:
 		self.IMG_TOKENS = image_tokens
 		self.include_attributes = include_attributes
 		self.max_error_length = max_error_length
+		self.max_actions_per_step = max_actions_per_step
 
 		system_message = self.system_prompt_class(
 			self.action_descriptions,
 			current_date=datetime.now(),
-			max_actions_per_step=max_actions_per_step,
+			max_actions_per_step=self.max_actions_per_step,
+			include_attributes=self.include_attributes,
 		).get_system_message()
 
 		self._add_message_with_tokens(system_message)
-		self.system_prompt = system_message
+		
 		self.tool_call_in_content = tool_call_in_content
 		tool_calls = [
 			{
@@ -95,13 +97,15 @@ class MessageManager:
 
 	def add_state_message(
 		self,
-		state: BrowserState,
+		state: Optional[BrowserState] = None,
+		previous_state: Optional[BrowserState] = None,
+		previous_goal: Optional[str] = None,
 		result: Optional[List[ActionResult]] = None,
 		step_info: Optional[AgentStepInfo] = None,
 	) -> None:
 		"""Add browser state as human message"""
-
-		# if keep in memory, add to directly to history and add state without result
+		
+		# Handle persistent results first (keep existing logic)
 		if result:
 			for r in result:
 				if r.include_in_memory:
@@ -110,19 +114,22 @@ class MessageManager:
 						self._add_message_with_tokens(msg)
 					if r.error:
 						msg = HumanMessage(
-							content='Action error: ' + str(r.error)[-self.max_error_length :]
+							content='Action error: ' + str(r.error)[-self.max_error_length:]
 						)
 						self._add_message_with_tokens(msg)
-					result = None  # if result in history, we dont want to add it again
+					result = None
 
-		# otherwise add state message and result to next message (which will not stay in memory)
+		# Create state message with comparison info
 		state_message = AgentMessagePrompt(
-			state,
-			result,
+			state=state,
+			result=result,
 			include_attributes=self.include_attributes,
 			max_error_length=self.max_error_length,
 			step_info=step_info,
+			previous_state=previous_state,
+			previous_goal=previous_goal,
 		).get_user_message()
+		
 		self._add_message_with_tokens(state_message)
 
 	def _remove_last_state_message(self) -> None:
@@ -155,9 +162,49 @@ class MessageManager:
 
 		self._add_message_with_tokens(msg)
 
-	def get_messages(self) -> List[BaseMessage]:
-		"""Get current message list, potentially trimmed to max tokens"""
+	def get_messages(
+		self, 
+		stage: str = 'action', 
+		eval_result: Optional[EvaluationOutput] = None,
+		previous_state: Optional[BrowserState] = None,
+		previous_goal: Optional[str] = None,
+		state: Optional[BrowserState] = None,
+		filter_result: Optional[FilterOutput] = None,
+		result: Optional[List[ActionResult]] = None,
+	) -> List[BaseMessage]:
+		"""Get current message list for the specified stage"""
 		self.cut_messages()
+		
+		# Get appropriate system prompt
+		system_prompt = self.system_prompt_class(
+			self.action_descriptions,
+			current_date=datetime.now(),
+			max_actions_per_step=self.max_actions_per_step,
+			include_attributes=self.include_attributes,
+		)
+		
+		if stage == 'evaluate':
+			new_system_message = system_prompt.get_eval_prompt(
+				previous_state=previous_state,
+				previous_goal=previous_goal,
+				current_state=state,
+				result=result,
+			)
+		elif stage == 'filter':
+			# Add eval result and current state to the filter prompt
+			new_system_message = system_prompt.get_filter_prompt(
+					next_goal=eval_result.current_state.next_goal,	# type: ignore
+					current_state=state, # type: ignore
+			)
+		else:  # default to action prompt
+			new_system_message = system_prompt.get_action_prompt(
+				eval_result=eval_result.current_state.evaluation_previous_goal, # type: ignore
+				filter_result=filter_result.filtered_dom, # type: ignore
+				next_goal=eval_result.current_state.next_goal, # type: ignore
+				memory=eval_result.current_state.memory, # type: ignore
+			)
+		
+		self._replace_message_with_tokens(0, new_system_message)
 		return [m.message for m in self.history.messages]
 
 	def cut_messages(self):
@@ -222,6 +269,12 @@ class MessageManager:
 		token_count = self._count_tokens(message)
 		metadata = MessageMetadata(input_tokens=token_count)
 		self.history.add_message(message, metadata)
+
+	def _replace_message_with_tokens(self, index: int, message: BaseMessage) -> None:
+		"""Replace message with token count metadata"""
+		token_count = self._count_tokens(message)
+		metadata = MessageMetadata(input_tokens=token_count)
+		self.history.replace_message(index, message, metadata)
 
 	def _count_tokens(self, message: BaseMessage) -> int:
 		"""Count tokens in a message using the model's tokenizer"""
