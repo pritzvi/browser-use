@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from browser_use.dom.history_tree_processor.service import DOMHistoryElement
 from browser_use.dom.views import DOMState
+# from browser_use.agent.prompts import AgentMessagePrompt
 
 
 # Pydantic
@@ -31,6 +32,7 @@ class BrowserStateHistory:
 	tabs: list[TabInfo]
 	interacted_element: list[DOMHistoryElement | None] | list[None]
 	screenshot: Optional[str] = None
+	prompt: Optional[Any] = None
 
 	def to_dict(self) -> dict[str, Any]:
 		data = {}
@@ -41,6 +43,7 @@ class BrowserStateHistory:
 		]
 		data['url'] = self.url
 		data['title'] = self.title
+		data['prompt'] = self.prompt
 		return data
 
 

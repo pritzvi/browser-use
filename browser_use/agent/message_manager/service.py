@@ -98,7 +98,7 @@ class MessageManager:
 		state: BrowserState,
 		result: Optional[List[ActionResult]] = None,
 		step_info: Optional[AgentStepInfo] = None,
-	) -> None:
+	) -> AgentMessagePrompt:
 		"""Add browser state as human message"""
 
 		# if keep in memory, add to directly to history and add state without result
@@ -124,6 +124,8 @@ class MessageManager:
 			step_info=step_info,
 		).get_user_message()
 		self._add_message_with_tokens(state_message)
+		
+		return state_message
 
 	def _remove_last_state_message(self) -> None:
 		"""Remove last state message from history"""

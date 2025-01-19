@@ -12,7 +12,7 @@ import time
 import uuid
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Optional, Type, TypeVar
+from typing import Any, Optional, Type, TypeVar, List
 
 from dotenv import load_dotenv
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -105,6 +105,8 @@ class Agent:
 		self.controller = controller
 		self.max_actions_per_step = max_actions_per_step
 
+		self.current_states : List[AgentMessagePrompt] = []
+
 		# Browser setup
 		self.injected_browser = browser is not None
 		self.injected_browser_context = browser_context is not None
@@ -175,7 +177,9 @@ class Agent:
 
 		try:
 			state = await self.browser_context.get_state(use_vision=self.use_vision)
-			self.message_manager.add_state_message(state, self._last_result, step_info)
+			agent_current_prompt = self.message_manager.add_state_message(state, self._last_result, step_info).content
+
+			self.current_states.append(agent_current_prompt)
 			input_messages = self.message_manager.get_messages()
 			try:
 				model_output = await self.get_next_action(input_messages)
@@ -276,6 +280,7 @@ class Agent:
 			tabs=state.tabs,
 			interacted_element=interacted_elements,
 			screenshot=state.screenshot,
+			prompt=self.current_states[-1]
 		)
 
 		history_item = AgentHistory(model_output=model_output, result=result, state=state_history)
