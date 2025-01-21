@@ -469,7 +469,7 @@ class BrowserContext:
 		# Start timing
 		start_time = time.time()
 
-		# await asyncio.sleep(self.minimum_wait_page_load_time)
+		await asyncio.sleep(self.minimum_wait_page_load_time)
 
 		# Wait for page load
 		try:

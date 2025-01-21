@@ -151,6 +151,7 @@ class Controller:
 			msg = f'🔗  Opened new tab with {params.url}'
 			logger.info(msg)
 			return ActionResult(extracted_content=msg, include_in_memory=True)
+		
 
 		# Content Actions
 		@self.registry.action(
